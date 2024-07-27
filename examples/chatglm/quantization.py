@@ -1,13 +1,13 @@
 import torch
 import time
 import logging
-from transformers import LlamaTokenizer, LlamaForCausalLM
+from transformers import AutoTokenizer,AutoModel
 import argparse
 
 from mi_optimize.quantization.models.chatglm_seq import chatglm_sequential
 from mi_optimize import Benchmark
-from mi_optimize.datasets.data_loader import get_calibrate_dataset
-from .web_demo import run_web_demo
+from mi_optimize.datasets.data_loader import get_calibrate_loader
+from web_demo import run_web_demo
 import datetime
 
 def load_model(model_name_or_path):
@@ -17,7 +17,7 @@ def load_model(model_name_or_path):
     torch.nn.init.kaiming_uniform_ = skip
     torch.nn.init.uniform_ = skip
     torch.nn.init.normal_ = skip
-    model = LlamaForCausalLM.from_pretrained(model_name_or_path, torch_dtype='auto')
+    model = AutoModel.from_pretrained(model_name_or_path, torch_dtype='auto',trust_remote_code = True)
     return model
 
 
@@ -59,10 +59,10 @@ if __name__=='__main__':
         
     model.eval()
     
-    tokenizer = LlamaTokenizer.from_pretrained(args.model_path, legacy=False)
+    tokenizer = AutoTokenizer.from_pretrained(args.model_path, legacy=False,trust_remote_code = True)
     
-
-    calibrate = get_calibrate_dataset(calibrate_name=args.calibrate_name, tokenizer=tokenizer, nsamples=args.num_calibrate, seqlen=args.seqlen)
+    calibrate_config ={'name':args.calibrate_name ,'nsamples':args.num_calibrate,'seqlen':args.seqlen}
+    calibrate = get_calibrate_loader(tokenizer=tokenizer,calibrate_config=calibrate_config)
     tick = time.time()
     
     model = chatglm_sequential(model=model, data=calibrate, **args_dict)
@@ -103,7 +103,7 @@ if __name__=='__main__':
     if args.save:
         from mi_optimize.export.utils import export_module
         model = export_module(model)
-        torch.save(model, args.save)
+        torch.save(model, args.save)  #TODO:chatglm的激活函数swiglu定义在了类的内部，导师torch.save无法正确打包，解决方案1，更改modeling_chatglm.py,将swiglu移到类外操作
         
     
     if args.web_demo:
