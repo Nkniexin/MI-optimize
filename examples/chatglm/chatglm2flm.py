@@ -2,7 +2,10 @@ import struct
 import builtins, os, json
 import numpy as np
 import torch
-from transformers import PreTrainedTokenizerFast
+from transformers import PreTrainedTokenizerFast,AutoModel,AutoTokenizer,AutoConfig
+from mi_optimize.export.qnn import QLinear
+from modeling_chatglm import ChatGLMForConditionalGeneration
+from configuration_chatglm import ChatGLMConfig
 from tokenizers.decoders import ByteLevel
 
 def writeString(fo, s):
@@ -28,7 +31,7 @@ fastllm_weight_type_dict = {
 }
 
 v = np.random.randint(-127, 127, [10, 20]);
-temp = v;
+temp = v
 c_max = np.expand_dims(np.abs(v).max(axis = -1), -1)
 c_scale = c_max / 127.0
 v = (v / c_scale + 128.5).clip(1, 255).astype(np.uint8)
@@ -129,10 +132,9 @@ def chatglm2flm(
         print("dtype should be one of ", list(fastllm_data_type_dict.keys()))
         exit(0)
 
+    
     # 0.1 model info
     modelInfo = model.config.__dict__
-    print(modelInfo)
-    exit(0)
     if model.generation_config is not None:
         modelInfo.update(model.generation_config.__dict__)
     if ("model_type" not in modelInfo):
@@ -142,7 +144,7 @@ def chatglm2flm(
     fo = open(exportPath, "wb")
 
     # 0. version id
-    fo.write(struct.pack('i', 2))
+    fo.write(struct.pack('i', 2)) #truct.pack('i', 2) 将整数 2 打包成一个二进制格式的数据。这里的 'i' 表示打包的是一个标准的 4 字节（32 位）整数
 
     if (pre_prompt is not None):
         modelInfo["pre_prompt"] = pre_prompt
@@ -152,6 +154,8 @@ def chatglm2flm(
         modelInfo["bot_role"] = bot_role
     if (history_sep):
         modelInfo["history_sep"] = history_sep
+    
+
     if (modelInfo["model_type"] == "baichuan"):
         if (hasattr(model, "model") and hasattr(model.model, "get_alibi_mask")):
             # Baichuan / Baichuan2 13B
@@ -265,7 +269,7 @@ def chatglm2flm(
                 writeKeyValue(fo, str(it), str(adapter_dict[it]))
 
     weight_type_dict = {}
-    model = model.cpu();
+    model = model.cpu()
     dict = model.state_dict()
 
     # 1. vocab
@@ -314,8 +318,8 @@ def chatglm2flm(
 
     module_dict = {}
     for key, m in model.named_modules():
-        if (isinstance(m, torch.nn.Linear)):
-            weight_type_dict[key + ".weight"] = "linear"
+        if (isinstance(m, QLinear)):
+            weight_type_dict[key + ".weight"] = "QLinear"
             module_dict[key + ".weight"] = m
         if (isinstance(m, torch.nn.Embedding)):
             weight_type_dict[key + ".weight"] = "embedding"
@@ -362,3 +366,17 @@ def chatglm2flm(
         print("output (", tot, "/", len(dict), end = " )\r") #仅使用hui'c
     print("\nfinish.")
     fo.close()
+
+if __name__ == '__main__' :
+    
+    
+    tokenizer = AutoTokenizer.from_pretrained('/home/wf/models/chatglm3-6b',trust_remote_code = True)  #TODO:这行代码与下面交换会导致报错，因为torch.load和torch.save得具有相同的脚本结构，torch.save如果使用了trust_remote_code = true可能会导致这可能会改变 Python 环境或路径，从而影响模块的导入顺序,所以这里把tokenizer放到前面执行
+    model = torch.load('/home/wf/nx/MI-optimize/examples/chatglm/w8a16RTN.pt')
+    exportPath = '/home/wf/nx/MI-optimize/examples/chatglm/chatglm3-6b-int8.flm'
+    model.eval()
+
+    chatglm2flm(exportPath=exportPath,model=model,tokenizer=tokenizer,dtype = 'int8')
+
+    
+
+    

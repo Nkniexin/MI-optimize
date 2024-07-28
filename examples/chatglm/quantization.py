@@ -2,6 +2,7 @@ import torch
 import time
 import logging
 from transformers import AutoTokenizer,AutoModel
+from transformers.modeling_utils import PreTrainedModel
 import argparse
 
 from mi_optimize.quantization.models.chatglm_seq import chatglm_sequential
@@ -104,8 +105,8 @@ if __name__=='__main__':
     if args.save:
         from mi_optimize.export.utils import export_module
         model = export_module(model)
-        torch.save(model, args.save)  #chatglm的激活函数swiglu定义在了类的内部，导师torch.save无法正确打包，解决方案1：更改modeling_chatglm.py,将swiglu函数移到MLP类外
-        
+        #chatglm的激活函数swiglu定义在了类的内部，导师torch.save无法正确打包，解决方案1：更改modeling_chatglm.py,将swiglu函数移到MLP类外
+        torch.save(model, args.save)  
     
     if args.web_demo:
         run_web_demo(model, tokenizer)
