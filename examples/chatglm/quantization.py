@@ -10,6 +10,7 @@ from mi_optimize.datasets.data_loader import get_calibrate_loader
 from web_demo import run_web_demo
 import datetime
 
+#下载模型
 def load_model(model_name_or_path):
     def skip(*args, **kwargs):
         pass
