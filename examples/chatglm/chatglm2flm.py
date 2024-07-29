@@ -25,9 +25,8 @@ fastllm_data_type_dict = {
     "float32": 0,
 }
 fastllm_weight_type_dict = {
-    "linear": 1,
+    "QLinear": 1,
     "embedding": 2,
-    "QuantizedLinear": 111
 }
 
 v = np.random.randint(-127, 127, [10, 20]);
@@ -318,52 +317,125 @@ def chatglm2flm(
 
     module_dict = {}
     for key, m in model.named_modules():
-        if (isinstance(m, QLinear)):
-            weight_type_dict[key + ".weight"] = "QLinear"
-            module_dict[key + ".weight"] = m
+        if (isinstance(m, QLinear)):              #Qlinear是MI-optimize转换的量化层
+            weight_type_dict[key + ".pack_weight"] = "QLinear"
+            module_dict[key + ".pack_weight"] = m
         if (isinstance(m, torch.nn.Embedding)):
             weight_type_dict[key + ".weight"] = "embedding"
 
     # 2. weight
-    fo.write(struct.pack('i', len(dict)))
+    #写入权重，从这里开始更改，TODO:目前只是初步开发阶段，只需实现perchannel的8bit权重量化
+    fo.write(struct.pack('i', len(dict)))  #dict = model.state_dict()
     tot = 0
     for key in dict:
-        ori_data_type = 0
-        ori_np_data_type = np.float32
-        cur_weight_type = 0
-        if (key in weight_type_dict and weight_type_dict[key] in fastllm_weight_type_dict):
-            cur_weight_type = fastllm_weight_type_dict[weight_type_dict[key]]
-        to_data_type = 0
+        weight_name = key 
 
-        if (cur_weight_type == 1):
-            to_data_type = fastllm_data_type_dict[dtype]
-            if (to_data_type == 7):
-                ori_data_type = 7
-                ori_np_data_type = np.float16
+        weight_name_list = weight_name.split('.')
 
-        if (dict[key].dtype == torch.bfloat16):
-            cur = dict[key].half().numpy().astype(ori_np_data_type)
-        else:
-            cur = dict[key].numpy().astype(ori_np_data_type)
-        
-        weight_name = key
-        if hasattr(model, "peft_config"):
-            weight_name = weight_name.replace('base_model.model.', '')
-        writeString(fo, weight_name)
-        fo.write(struct.pack('i', len(cur.shape)))
-        for i in cur.shape:
-            fo.write(struct.pack('i', i))
-        if (to_data_type == 3):
-            write_int8(fo, cur)
-        elif (to_data_type == 8):
-            write_int4(fo, cur)
-        elif (to_data_type == 9):
-            write_int4g(fo, cur, groupCnt = int4g_groupcnt)
-        else:
-            fo.write(struct.pack('i', to_data_type))
-            fo.write(cur.data)
+        if weight_name_list[-1] == 'pack_weight' :
+            #得到pack_weight
+            pack_weight= dict[weight_name].numpy()
+
+            weight_name_list[-1] = 'weight'
+            weight_name = ".".join(weight_name_list)
+            writeString(fo, weight_name)          #写入权重的名字，如'transformer.encoder.layers.0.self_attention.query_key_value.weight'
+            
+            weight_name_list[-1] = 'w_scale'
+            w_scale_name = ".".join(weight_name_list)
+            #得到w_scale
+            w_scale = dict[w_scale_name].numpy()
+
+            weight_name_list[-1] = 'w_zero_point'
+            w_zero_point_name = ".".join(weight_name_list)
+            #得到权重的零点
+            w_zero_point = dict[w_zero_point_name].numpy()
+            
+            if dtype == "int8":
+                fo.write(struct.pack('i', len(pack_weight.shape)))  #写入权重的形状的长度，可以得知权重的维度数量并写入flm文件
+
+                #TODO，pack_weight的数据类型是int32,这里假定pack_weight.shape[0]*4就是原来真实的维度，后续会作优化
+                fo.write(struct.pack('i', pack_weight.shape[0]*4))
+                fo.write(struct.pack('i', pack_weight.shape[1]))
+
+                fo.write(struct.pack('i', 3))  #3代表为量化成int8
+                fo.write(struct.pack('i', 0))  #0代表反量化回float32
+
+                # 写入量化的scale和零点
+                # print(pack_weight.dtype)  #int32
+                # print(w_scale.dtype)      #float32
+                # print(w_zero_point.dtype) #float32，TODO：后续优化，zero_point应该与权重表达的形式一致，进一步节省空间
+                # print(pack_weight.shape)
+                # print(w_scale.shape)
+                # print(w_zero_point.shape)
+
+                for i in range(pack_weight.shape[1]):
+                    fo.write(struct.pack('f', w_scale[i]))
+                    fo.write(struct.pack('f', w_zero_point[i]))
+
+                v = np.zeros((pack_weight.shape[0]*4,pack_weight.shape[1]),dtype=np.int32)
+
+                for i  in range(pack_weight.shape[0]*4):
+                    row = i//4
+                    off = i%4
+                    v[i] = (pack_weight[row]>>(32-(off+1)*8))&(0x000000FF)
+ 
+                v = v.astype(np.uint8)
+
+               #写入uint8权重
+                fo.write(v)
+            else :
+                raise TypeError(f"不支持的权重类型,目前只支持int8")
+        else :
+            #TODO:目前只考虑除了linear层的权重可以是int8类型的，其他都是float32,后续需要作优化
+            if weight_name_list[-1] != 'w_scale' and weight_name_list[-1] != 'w_zero_point' :
+                writeString(fo, weight_name)
+                cur = dict[key].numpy().astype(np.float32)
+                fo.write(struct.pack('i', len(cur.shape)))
+                for i in cur.shape:
+                    fo.write(struct.pack('i', i))
+                fo.write(struct.pack('i', 0))
+                fo.write(cur.data)
         tot += 1
-        print("output (", tot, "/", len(dict), end = " )\r") #仅使用hui'c
+
+
+
+
+        # ori_data_type = 0
+        # ori_np_data_type = np.float32
+        # cur_weight_type = 0
+        # if (key in weight_type_dict and weight_type_dict[key] in fastllm_weight_type_dict):
+        #     cur_weight_type = fastllm_weight_type_dict[weight_type_dict[key]]
+        # to_data_type = 0
+
+        # if (cur_weight_type == 1):  #等于1意味着是Qlinear中的权重
+        #     to_data_type = fastllm_data_type_dict[dtype]
+        #     if (to_data_type == 7):
+        #         ori_data_type = 7
+        #         ori_np_data_type = np.float16
+
+        # if (dict[key].dtype == torch.bfloat16):
+        #     cur = dict[key].half().numpy().astype(ori_np_data_type)
+        # else:
+        #     cur = dict[key].numpy().astype(ori_np_data_type)
+        
+        # weight_name = key
+        # if hasattr(model, "peft_config"):
+        #     weight_name = weight_name.replace('base_model.model.', '')
+        # writeString(fo, weight_name)
+        # fo.write(struct.pack('i', len(cur.shape)))
+        # for i in cur.shape:
+        #     fo.write(struct.pack('i', i))
+        # if (to_data_type == 3):
+        #     write_int8(fo, cur)
+        # elif (to_data_type == 8):
+        #     write_int4(fo, cur)
+        # elif (to_data_type == 9):
+        #     write_int4g(fo, cur, groupCnt = int4g_groupcnt)
+        # else:
+        #     fo.write(struct.pack('i', to_data_type))
+        #     fo.write(cur.data)
+        # tot += 1
+        print("output (", tot, "/", len(dict), end = " )\r") #仅使用换行符可以达到刷新的目的。
     print("\nfinish.")
     fo.close()
 
@@ -374,7 +446,6 @@ if __name__ == '__main__' :
     model = torch.load('/home/wf/nx/MI-optimize/examples/chatglm/w8a16RTN.pt')
     exportPath = '/home/wf/nx/MI-optimize/examples/chatglm/chatglm3-6b-int8.flm'
     model.eval()
-
     chatglm2flm(exportPath=exportPath,model=model,tokenizer=tokenizer,dtype = 'int8')
 
     
