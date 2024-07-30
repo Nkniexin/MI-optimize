@@ -107,6 +107,7 @@ def write_int4(fo,pack_weight,w_scale,w_zero_point):
     fo.write(struct.pack('i', pack_weight.shape[1]))
     fo.write(struct.pack('i', pack_weight.shape[0]*8))
     fo.write(struct.pack('i', 4))  
+    fo.write(struct.pack('i', 0))
     for i in range(pack_weight.shape[1]):
         fo.write(struct.pack('f', w_scale[i]))
         fo.write(struct.pack('f', w_zero_point[i]))
@@ -436,10 +437,16 @@ if __name__ == '__main__' :
     
     
     tokenizer = AutoTokenizer.from_pretrained('/home/wf/models/chatglm3-6b',trust_remote_code = True)  #TODO:这行代码与下面交换会导致报错，因为torch.load和torch.save得具有相同的脚本结构，torch.save如果使用了trust_remote_code = true可能会导致这可能会改变 Python 环境或路径，从而影响模块的导入顺序,所以这里把tokenizer放到前面执行
-    model = torch.load('/home/wf/nx/MI-optimize/examples/chatglm/w4a16gptq.pt')
+    model = torch.load('/home/wf/nx/MI-optimize/examples/chatglm/w4a16rtn.pt')
     exportPath = '/home/wf/nx/MI-optimize/examples/chatglm/chatglm3-6b-int4.flm'
     model.eval()
+    # model.cuda()
 
+    
+    # response, history = model.chat(tokenizer, "你好", history=[])
+    # print(response)
+
+    # exit(0)
     chatglm2flm(exportPath=exportPath,model=model,tokenizer=tokenizer,dtype = 'int4')
 
     
