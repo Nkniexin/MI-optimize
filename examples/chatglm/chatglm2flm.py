@@ -1,11 +1,14 @@
+"""
+author: niexin
+Data:2024.7.30
+Description: 将chatglm3导出为.flm文件,而后利用fastllm框架进行推理
+"""
 import struct
 import builtins, os, json
 import numpy as np
 import torch
 from transformers import PreTrainedTokenizerFast,AutoModel,AutoTokenizer,AutoConfig
 from mi_optimize.export.qnn import QLinear
-from modeling_chatglm import ChatGLMForConditionalGeneration
-from configuration_chatglm import ChatGLMConfig
 from tokenizers.decoders import ByteLevel
 
 def writeString(fo, s):
@@ -29,18 +32,12 @@ fastllm_weight_type_dict = {
     "embedding": 2,
 }
 
-v = np.random.randint(-127, 127, [10, 20]);
-temp = v
-c_max = np.expand_dims(np.abs(v).max(axis = -1), -1)
-c_scale = c_max / 127.0
-v = (v / c_scale + 128.5).clip(1, 255).astype(np.uint8)
-
 def write_int8(fo, v): #v代表权重矩阵
     c_max = np.expand_dims(np.abs(v).max(axis = -1), -1).clip(0.1, 1e100)
     c_scale = c_max / 127.0
     v = (v / c_scale + 128.5).clip(1, 255).astype(np.uint8) #默认使用对称量化，
     fo.write(struct.pack('i', 3))  #3代表为量化成int8
-    fo.write(struct.pack('i', 0))  #0代表反量化回float32
+    fo.write(struct.pack('i', 0))  
     for i in range(c_max.shape[0]):
         fo.write(struct.pack('f', -c_max[i][0]));
         fo.write(struct.pack('f', c_max[i][0]));
@@ -109,7 +106,7 @@ def write_int4(fo, v):
 
 def chatglm2flm(
     exportPath,
-    model,          #假定现在输入的模型都是经过MI-optimize量化过的
+    model,          #假定现在输入的模型都是经过MI-optimize量化打包过的
     tokenizer = None,
     pre_prompt = None,
     user_role = None,
@@ -117,7 +114,7 @@ def chatglm2flm(
     history_sep = None,
     eos_id = None,
     dtype = "float16"
-            ):
+        ):
     
     int4g_groupcnt = -1
     if (dtype.startswith("int4g") and len(dtype) > 5):
@@ -318,19 +315,28 @@ def chatglm2flm(
     module_dict = {}
     for key, m in model.named_modules():
         if (isinstance(m, QLinear)):              #Qlinear是MI-optimize转换的量化层
-            weight_type_dict[key + ".pack_weight"] = "QLinear"
-            module_dict[key + ".pack_weight"] = m
+            weight_type_dict[key + ".weight"] = "QLinear"
+            module_dict[key + ".weight"] = m
         if (isinstance(m, torch.nn.Embedding)):
             weight_type_dict[key + ".weight"] = "embedding"
 
     # 2. weight
-    #写入权重，从这里开始更改，TODO:目前只是初步开发阶段，只需实现perchannel的8bit权重量化
+    #写入权重，从这里开始更改，TODO:目前只是初步开发阶段，只实现了perchannel的8bit权重量化
     fo.write(struct.pack('i', len(dict)))  #dict = model.state_dict()
     tot = 0
+    num = 0
     for key in dict:
+
+        
+
+        
         weight_name = key 
 
         weight_name_list = weight_name.split('.')
+
+        if weight_name_list[-1] == 'bias' and weight_name_list[-2] != 'query_key_value':
+            num += 1
+            continue
 
         if weight_name_list[-1] == 'pack_weight' :
             #得到pack_weight
@@ -354,12 +360,15 @@ def chatglm2flm(
                 fo.write(struct.pack('i', len(pack_weight.shape)))  #写入权重的形状的长度，可以得知权重的维度数量并写入flm文件
 
                 #TODO，pack_weight的数据类型是int32,这里假定pack_weight.shape[0]*4就是原来真实的维度，后续会作优化
-                fo.write(struct.pack('i', pack_weight.shape[0]*4))
+                
                 fo.write(struct.pack('i', pack_weight.shape[1]))
+                fo.write(struct.pack('i', pack_weight.shape[0]*4))
 
                 fo.write(struct.pack('i', 3))  #3代表为量化成int8
-                fo.write(struct.pack('i', 0))  #0代表反量化回float32
+                fo.write(struct.pack('i', 0))  #这里是为了指定量化沿着那个维度展开，0代表per-channel之类的，后续有待考量
 
+
+                
                 # 写入量化的scale和零点
                 # print(pack_weight.dtype)  #int32
                 # print(w_scale.dtype)      #float32
@@ -380,6 +389,8 @@ def chatglm2flm(
                     v[i] = (pack_weight[row]>>(32-(off+1)*8))&(0x000000FF)
  
                 v = v.astype(np.uint8)
+                v = np.transpose(v)
+                v = np.ascontiguousarray(v)
 
                #写入uint8权重
                 fo.write(v)
@@ -388,6 +399,8 @@ def chatglm2flm(
         else :
             #TODO:目前只考虑除了linear层的权重可以是int8类型的，其他都是float32,后续需要作优化
             if weight_name_list[-1] != 'w_scale' and weight_name_list[-1] != 'w_zero_point' :
+                if weight_name == 'transformer.output_layer.core.weight':
+                    weight_name = 'transformer.output_layer.weight'
                 writeString(fo, weight_name)
                 cur = dict[key].numpy().astype(np.float32)
                 fo.write(struct.pack('i', len(cur.shape)))
@@ -395,6 +408,8 @@ def chatglm2flm(
                     fo.write(struct.pack('i', i))
                 fo.write(struct.pack('i', 0))
                 fo.write(cur.data)
+            else :
+                num += 1
         tot += 1
 
 
@@ -435,8 +450,10 @@ def chatglm2flm(
         #     fo.write(struct.pack('i', to_data_type))
         #     fo.write(cur.data)
         # tot += 1
-        print("output (", tot, "/", len(dict), end = " )\r") #仅使用换行符可以达到刷新的目的。
+        print(tot, ": ", key)
+        #print("output (", tot, "/", len(dict), end = " )\r") #仅使用换行符可以达到刷新的目的。
     print("\nfinish.")
+    print(num)
     fo.close()
 
 if __name__ == '__main__' :
