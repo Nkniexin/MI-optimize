@@ -21,27 +21,52 @@ def writeKeyValue(fo, key, value):
     writeString(fo, value)
 
 fastllm_data_type_dict = {
-    "int4g": 9,
-    "int4": 8,
-    "int8": 3,
-    "float16": 7,
     "float32": 0,
+    "bfloat16": 1,
+    "int16" : 2,
+    "int8": 3,
+    "int4": 4,
+    "int2": 5,
+    "bit" : 6,
+    "float16" :7,
+    "int4_nozero":8,
+    "int4g": 9,
 }
 fastllm_weight_type_dict = {
     "QLinear": 1,
     "embedding": 2,
 }
 
-def write_int8(fo, v): #v代表权重矩阵
-    c_max = np.expand_dims(np.abs(v).max(axis = -1), -1).clip(0.1, 1e100)
-    c_scale = c_max / 127.0
-    v = (v / c_scale + 128.5).clip(1, 255).astype(np.uint8) #默认使用对称量化，
-    fo.write(struct.pack('i', 3))  #3代表为量化成int8
-    fo.write(struct.pack('i', 0))  
-    for i in range(c_max.shape[0]):
-        fo.write(struct.pack('f', -c_max[i][0]));
-        fo.write(struct.pack('f', c_max[i][0]));
+def write_int8(fo,pack_weight,w_scale,w_zero_point):
+    fo.write(struct.pack('i', len(pack_weight.shape)))  #写入权重的形状的长度，可以得知权重的维度数量并写入flm文件
+
+    #由于pack_weight的形状是（out,in）类型的，而fastllm输入的矩阵需要（in,out）形状的
+    #TODO，pack_weight的数据类型是int32,这里假定pack_weight.shape[0]*4就是原来真实的维度，后续会作优化
+    fo.write(struct.pack('i', pack_weight.shape[1]))
+    fo.write(struct.pack('i', pack_weight.shape[0]*4))
+
+    fo.write(struct.pack('i', 3))  #3代表为量化成int8，可参看fastllm_data_type_dict字典
+    fo.write(struct.pack('i', 0))  #这里是为了指定量化沿着那个维度展开，0代表per-channel之类的
+    # 写入量化的scale和零点
+    for i in range(pack_weight.shape[1]):
+        fo.write(struct.pack('f', w_scale[i]))
+        fo.write(struct.pack('f', w_zero_point[i]))
+
+    v = np.zeros((pack_weight.shape[0]*4,pack_weight.shape[1]),dtype=np.int32)
+    #解压pack_weight
+    for i  in range(pack_weight.shape[0]*4):
+        row = i//4
+        off = i%4
+        v[i] = (pack_weight[row]>>(32-(off+1)*8))&(0x000000FF)
+    #转为uint8
+    v = v.astype(np.uint8)
+    #转置
+    v = np.transpose(v)
+    v = np.ascontiguousarray(v)
+
+    #写入uint8权重
     fo.write(v.data)
+
 
 def write_int4g(fo, v, groupCnt = -1):
     if (groupCnt == -1):
@@ -77,32 +102,24 @@ def write_int4g(fo, v, groupCnt = -1):
         fo.write(struct.pack('f', c_max[i][0]));
     fo.write(v)
 
-def write_int4(fo, v):
-    # c_min = np.expand_dims(-np.abs(v).max(axis = -1), -1)
-    # c_max = np.expand_dims(np.abs(v).max(axis = -1), -1)
-    # c_scale = c_max / 7.0
-    # c_min = c_scale * -8.0
-
-    c_min = np.expand_dims(v.min(axis = -1), -1)
-    c_max = np.expand_dims(v.max(axis = -1), -1)
-    c_scale = (c_max - c_min) / 15.0
-    c_zero = np.round(0.0 - c_min / c_scale)
-    c_zero = c_zero.clip(0, 15)
-    c_min = -c_scale * c_zero
-
-    v = (v - c_min) / c_scale
-    v = (v + 0.5).astype(np.int8).clip(0, 15).astype(np.uint8)
+def write_int4(fo,pack_weight,w_scale,w_zero_point):
+    fo.write(struct.pack('i', len(pack_weight.shape)))  
+    fo.write(struct.pack('i', pack_weight.shape[1]))
+    fo.write(struct.pack('i', pack_weight.shape[0]*8))
+    fo.write(struct.pack('i', 4))  
+    for i in range(pack_weight.shape[1]):
+        fo.write(struct.pack('f', w_scale[i]))
+        fo.write(struct.pack('f', w_zero_point[i]))
+    v = np.zeros((pack_weight.shape[0]*8,pack_weight.shape[1]),dtype=np.int32)
+    for i  in range(pack_weight.shape[0]*8):
+        row = i//8
+        off = i%8
+        v[i] = (pack_weight[row]>>(32-(off+1)*4))&(0x0000000F)
+    v = v.astype(np.uint8)
+    v = np.transpose(v)
+    v = np.ascontiguousarray(v)
     v = v[:, 0::2] * 16 + v[:, 1::2]
-    fo.write(struct.pack('i', 8))
-    fo.write(struct.pack('i', 0))
-    for i in range(c_min.shape[0]):
-        fo.write(struct.pack('f', c_min[i][0]));
-        fo.write(struct.pack('f', c_max[i][0]));
     fo.write(v.data)
-
-
-
-
 
 def chatglm2flm(
     exportPath,
@@ -322,23 +339,20 @@ def chatglm2flm(
 
     # 2. weight
     #写入权重，从这里开始更改，TODO:目前只是初步开发阶段，只实现了perchannel的8bit权重量化
-    fo.write(struct.pack('i', len(dict)))  #dict = model.state_dict()
-    tot = 0
-    num = 0
+    cnt = 0
     for key in dict:
+        key_name_list = key.split('.')
+        if key_name_list[-1]  != 'w_scale' and key_name_list[-1] != 'w_zero_point' :
+            cnt += 1
+    fo.write(struct.pack('i', int(cnt)))  #dict = model.state_dict()
 
-        
-
-        
+    tot = 0
+    for key in dict:
         weight_name = key 
-
         weight_name_list = weight_name.split('.')
 
-        if weight_name_list[-1] == 'bias' and weight_name_list[-2] != 'query_key_value':
-            num += 1
-            continue
-
-        if weight_name_list[-1] == 'pack_weight' :
+        if weight_name_list[-1] == 'pack_weight' : 
+            tot += 1
             #得到pack_weight
             pack_weight= dict[weight_name].numpy()
 
@@ -357,49 +371,16 @@ def chatglm2flm(
             w_zero_point = dict[w_zero_point_name].numpy()
             
             if dtype == "int8":
-                fo.write(struct.pack('i', len(pack_weight.shape)))  #写入权重的形状的长度，可以得知权重的维度数量并写入flm文件
-
-                #TODO，pack_weight的数据类型是int32,这里假定pack_weight.shape[0]*4就是原来真实的维度，后续会作优化
-                
-                fo.write(struct.pack('i', pack_weight.shape[1]))
-                fo.write(struct.pack('i', pack_weight.shape[0]*4))
-
-                fo.write(struct.pack('i', 3))  #3代表为量化成int8
-                fo.write(struct.pack('i', 0))  #这里是为了指定量化沿着那个维度展开，0代表per-channel之类的，后续有待考量
-
-
-                
-                # 写入量化的scale和零点
-                # print(pack_weight.dtype)  #int32
-                # print(w_scale.dtype)      #float32
-                # print(w_zero_point.dtype) #float32，TODO：后续优化，zero_point应该与权重表达的形式一致，进一步节省空间
-                # print(pack_weight.shape)
-                # print(w_scale.shape)
-                # print(w_zero_point.shape)
-
-                for i in range(pack_weight.shape[1]):
-                    fo.write(struct.pack('f', w_scale[i]))
-                    fo.write(struct.pack('f', w_zero_point[i]))
-
-                v = np.zeros((pack_weight.shape[0]*4,pack_weight.shape[1]),dtype=np.int32)
-
-                for i  in range(pack_weight.shape[0]*4):
-                    row = i//4
-                    off = i%4
-                    v[i] = (pack_weight[row]>>(32-(off+1)*8))&(0x000000FF)
- 
-                v = v.astype(np.uint8)
-                v = np.transpose(v)
-                v = np.ascontiguousarray(v)
-
-               #写入uint8权重
-                fo.write(v)
-            else :
-                raise TypeError(f"不支持的权重类型,目前只支持int8")
+                write_int8(fo,pack_weight,w_scale,w_zero_point)
+            elif dtype == "int4":
+                write_int4(fo,pack_weight,w_scale,w_zero_point)
+            else:
+                raise TypeError(f"不支持的权重量化类型")
         else :
             #TODO:目前只考虑除了linear层的权重可以是int8类型的，其他都是float32,后续需要作优化
             if weight_name_list[-1] != 'w_scale' and weight_name_list[-1] != 'w_zero_point' :
-                if weight_name == 'transformer.output_layer.core.weight':
+                tot += 1
+                if weight_name == 'transformer.output_layer.core.weight':  #遗留问题，在fastllm框架中，会替换所有的torch.nn.linear为LinearQuanthub,但是该层并不属于ChatGLMblock,导致这里会多个'core'
                     weight_name = 'transformer.output_layer.weight'
                 writeString(fo, weight_name)
                 cur = dict[key].numpy().astype(np.float32)
@@ -408,9 +389,6 @@ def chatglm2flm(
                     fo.write(struct.pack('i', i))
                 fo.write(struct.pack('i', 0))
                 fo.write(cur.data)
-            else :
-                num += 1
-        tot += 1
 
 
 
@@ -450,20 +428,19 @@ def chatglm2flm(
         #     fo.write(struct.pack('i', to_data_type))
         #     fo.write(cur.data)
         # tot += 1
-        print(tot, ": ", key)
-        #print("output (", tot, "/", len(dict), end = " )\r") #仅使用换行符可以达到刷新的目的。
+        print("output (", tot, "/", cnt, end = " )\r") #仅使用换行符可以达到刷新的目的。
     print("\nfinish.")
-    print(num)
     fo.close()
 
 if __name__ == '__main__' :
     
     
     tokenizer = AutoTokenizer.from_pretrained('/home/wf/models/chatglm3-6b',trust_remote_code = True)  #TODO:这行代码与下面交换会导致报错，因为torch.load和torch.save得具有相同的脚本结构，torch.save如果使用了trust_remote_code = true可能会导致这可能会改变 Python 环境或路径，从而影响模块的导入顺序,所以这里把tokenizer放到前面执行
-    model = torch.load('/home/wf/nx/MI-optimize/examples/chatglm/w8a16RTN.pt')
-    exportPath = '/home/wf/nx/MI-optimize/examples/chatglm/chatglm3-6b-int8.flm'
+    model = torch.load('/home/wf/nx/MI-optimize/examples/chatglm/w4a16gptq.pt')
+    exportPath = '/home/wf/nx/MI-optimize/examples/chatglm/chatglm3-6b-int4.flm'
     model.eval()
-    chatglm2flm(exportPath=exportPath,model=model,tokenizer=tokenizer,dtype = 'int8')
+
+    chatglm2flm(exportPath=exportPath,model=model,tokenizer=tokenizer,dtype = 'int4')
 
     
 
