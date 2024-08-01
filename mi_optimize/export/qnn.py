@@ -130,9 +130,6 @@ class QLinear(QModule):
                 w = w.reshape(-1, self.w_groupsize)
             scale = self.w_scale.reshape(-1, 1).to(w)
             zero = self.w_zero_point.reshape(-1, 1).to(w)
-            # print('w',w.shape)
-            # print('zero',zero.shape)
-            # print('scale',scale.shape)
             w = (w - zero) * scale
             w = w.reshape(out_channel, in_channel)
         else:
@@ -203,7 +200,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None  
             
             qlinear.w_scale.data.copy_(w_scale)
             
@@ -213,7 +210,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None
         return qlinear
 
     @classmethod
@@ -265,7 +262,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None
             
 
             qlinear.w_scale.data.copy_(w_scale)
@@ -276,7 +273,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None
         return qlinear
     
     @classmethod
@@ -324,7 +321,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None
             
             qlinear.w_scale.data.copy_(w_scale)
             
@@ -334,7 +331,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None
         return qlinear
     
     
@@ -387,7 +384,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None
             
             qlinear.w_scale.data.copy_(w_scale)
             
@@ -397,7 +394,7 @@ class QLinear(QModule):
             if bias is not None:
                 qlinear.bias.data.copy_(bias)
             else:
-                qlinear.bias.data.zero_()
+                qlinear.bias = None
         return qlinear
 
     
