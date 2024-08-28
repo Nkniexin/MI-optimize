@@ -6,7 +6,7 @@ import argparse
 
 from mi_optimize.quantization.models.llama_seq import llama_sequential
 from mi_optimize import Benchmark
-from mi_optimize.datasets.data_loader import get_calibrate_dataset
+from mi_optimize.datasets.data_loader import get_calibrate_loader
 import datetime
 
 def load_model(model_name_or_path):
@@ -61,7 +61,8 @@ if __name__=='__main__':
     tokenizer = LlamaTokenizer.from_pretrained(args.model_path, legacy=False)
     
 
-    calibrate = get_calibrate_dataset(calibrate_name=args.calibrate_name, tokenizer=tokenizer, nsamples=args.num_calibrate, seqlen=args.seqlen)
+    calibrate_config ={'name':args.calibrate_name ,'nsamples':args.num_calibrate,'seqlen':args.seqlen}
+    calibrate = get_calibrate_loader(tokenizer=tokenizer,calibrate_config=calibrate_config)
     tick = time.time()
     
     model = llama_sequential(model=model, data=calibrate, **args_dict)

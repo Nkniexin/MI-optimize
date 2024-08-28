@@ -82,10 +82,10 @@ if __name__ == '__main__' :
     cnt = 0
     s = time.time()
     output = []
-    for i  in range(10):
+    for i  in range(1):
         output.append(model.response('晚上睡不着怎么办'))
     e = time.time()
-    for i in range(10):
+    for i in range(1):
         cnt += len(tokenizer.encode(output[i]))
 
     print(cnt/(e-s))
@@ -97,12 +97,12 @@ if __name__ == '__main__' :
     cnt = 0
     s =time.time()
     output = []
-    for i in range(10):
+    for i in range(1):
         response , history= model.chat(tokenizer, input, history=[])
         output.append(response)
     e = time.time()
 
-    for i in range(10):
+    for i in range(1):
         cnt += len(tokenizer.encode(output[i]))
     print(cnt/(e-s))
 

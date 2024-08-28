@@ -72,3 +72,44 @@ ChatGLMForConditionalGeneration(
     )
   )
 )
+
+['transformer.embedding.word_embeddings.weight', 
+ 'transformer.rotary_pos_emb.inv_freq', 
+ 'transformer.encoder.layers.0.input_layernorm.weight', 
+ 'transformer.encoder.layers.0.self_attention.query_key_value.bias', 
+ 'transformer.encoder.layers.0.self_attention.query_key_value.w_scale', 
+ 'transformer.encoder.layers.0.self_attention.query_key_value.w_zero_point', 
+ 'transformer.encoder.layers.0.self_attention.query_key_value.pack_weight', 
+ 'transformer.encoder.layers.0.self_attention.dense.bias', 
+ 'transformer.encoder.layers.0.self_attention.dense.w_scale', 
+ 'transformer.encoder.layers.0.self_attention.dense.w_zero_point', 
+ 'transformer.encoder.layers.0.self_attention.dense.pack_weight', 
+ 'transformer.encoder.layers.0.post_attention_layernorm.weight', 
+ 'transformer.encoder.layers.0.mlp.dense_h_to_4h.bias', 
+ 'transformer.encoder.layers.0.mlp.dense_h_to_4h.w_scale', 
+ 'transformer.encoder.layers.0.mlp.dense_h_to_4h.w_zero_point', 
+ 'transformer.encoder.layers.0.mlp.dense_h_to_4h.pack_weight', 
+ 'transformer.encoder.layers.0.mlp.dense_4h_to_h.bias', 
+ 'transformer.encoder.layers.0.mlp.dense_4h_to_h.w_scale', 
+ 'transformer.encoder.layers.0.mlp.dense_4h_to_h.w_zero_point', 
+ 'transformer.encoder.layers.0.mlp.dense_4h_to_h.pack_weight', 
+ 'transformer.encoder.final_layernorm.weight', 'transformer.output_layer.core.weight']
+
+#awq
+['transformer.embedding.word_embeddings.weight',
+  'transformer.rotary_pos_emb.inv_freq', 
+  'transformer.encoder.layers.0.input_layernorm.weight', 
+  'transformer.encoder.layers.0.self_attention.query_key_value.bias', 
+  'transformer.encoder.layers.0.self_attention.query_key_value.w_scale',
+  'transformer.encoder.layers.0.self_attention.query_key_value.w_zero_point',
+  'transformer.encoder.layers.0.self_attention.query_key_value.pack_weight', 
+  'transformer.encoder.layers.0.self_attention.dense.w_scale', 
+  'transformer.encoder.layers.0.self_attention.dense.w_zero_point', 
+  'transformer.encoder.layers.0.self_attention.dense.pack_weight', 
+  'transformer.encoder.layers.0.post_attention_layernorm.weight', 
+  'transformer.encoder.layers.0.mlp.dense_h_to_4h.w_scale', 
+  'transformer.encoder.layers.0.mlp.dense_h_to_4h.w_zero_point', 
+  'transformer.encoder.layers.0.mlp.dense_h_to_4h.pack_weight', 
+  'transformer.encoder.layers.0.mlp.dense_4h_to_h.w_scale', 
+  'transformer.encoder.layers.0.mlp.dense_4h_to_h.w_zero_point', 
+  'transformer.encoder.layers.0.mlp.dense_4h_to_h.pack_weight']

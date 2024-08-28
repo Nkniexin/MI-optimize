@@ -1,6 +1,6 @@
 """
 author: niexin
-Data:2024.7.30
+Date:2024.7.30
 Description: 将chatglm3导出为.flm文件,而后利用fastllm框架进行推理
 """
 import struct
@@ -19,6 +19,13 @@ def writeString(fo, s):
 def writeKeyValue(fo, key, value):
     writeString(fo, key)
     writeString(fo, value)
+
+quantization_method_set =[
+    "gptq",
+    "rtn",
+    "awq",
+    "smoothqunat"
+]
 
 fastllm_data_type_dict = {
     "float32": 0,
@@ -122,6 +129,24 @@ def write_int4(fo,pack_weight,w_scale,w_zero_point):
     v = v[:, 0::2] * 16 + v[:, 1::2]
     fo.write(v.data)
 
+
+def factor_fuse(model , quantization_method):
+    
+    if quantization_method == 'rtn' or quantization_method == 'gptq': #如果是rtn和gptq，则不需要做参数融合
+        return
+    
+    if quantization_method == 'awq':
+        for layer in model.transformer.encoder.layers:
+            block = layer
+            
+            #将qkv的factor融入到前一层的RMSnorm的权重中
+            block.input_layernorm.weight = block.input_layernorm.weight.div(block.self_attention.query_key_value.smooth_factor.view(1, -1))
+
+            #将dense的facotr融入到前面的qkv矩阵当中的v矩阵的scale中。
+
+
+                
+
 def chatglm2flm(
     exportPath,
     model,          #假定现在输入的模型都是经过MI-optimize量化打包过的
@@ -131,7 +156,8 @@ def chatglm2flm(
     bot_role = None,
     history_sep = None,
     eos_id = None,
-    dtype = "float16"
+    dtype = "float16", #dtype代表权重的量数据类型
+    quantization_method = 'rtn',
         ):
     
     int4g_groupcnt = -1
@@ -339,13 +365,16 @@ def chatglm2flm(
             weight_type_dict[key + ".weight"] = "embedding"
 
     # 2. weight
-    #写入权重，从这里开始更改，TODO:目前只是初步开发阶段，只实现了perchannel的8bit权重量化
+    #写入权重，从这里开始更改，TODO:目前只是初步开发阶段，只实现了perchannel的8bit.4bit权重量化
     cnt = 0
     for key in dict:
         key_name_list = key.split('.')
         if key_name_list[-1]  != 'w_scale' and key_name_list[-1] != 'w_zero_point' :
             cnt += 1
     fo.write(struct.pack('i', int(cnt)))  #dict = model.state_dict()
+
+    #根据不同的量化方法做一些参数融合，如awq需要将smooth_factor融合到前一层的权重中,目前处于开发阶段
+    #factor_fuse(model,quantization_method)
 
     tot = 0
     for key in dict:
@@ -381,7 +410,7 @@ def chatglm2flm(
             #TODO:目前只考虑除了linear层的权重可以是int8类型的，其他都是float32,后续需要作优化
             if weight_name_list[-1] != 'w_scale' and weight_name_list[-1] != 'w_zero_point' :
                 tot += 1
-                if weight_name == 'transformer.output_layer.core.weight':  #遗留问题，在fastllm框架中，会替换所有的torch.nn.linear为LinearQuanthub,但是该层并不属于ChatGLMblock,导致这里会多个'core'
+                if weight_name == 'transformer.output_layer.core.weight':  #遗留问题，在MI-optimize框架中，会替换所有的torch.nn.linear为LinearQuanthub,但是该层并不属于ChatGLMblock,导致这里会多个'core'
                     weight_name = 'transformer.output_layer.weight'
                 writeString(fo, weight_name)
                 cur = dict[key].numpy().astype(np.float32)
@@ -390,8 +419,6 @@ def chatglm2flm(
                     fo.write(struct.pack('i', i))
                 fo.write(struct.pack('i', 0))
                 fo.write(cur.data)
-
-
 
 
         # ori_data_type = 0
@@ -439,8 +466,10 @@ if __name__ == '__main__' :
     tokenizer = AutoTokenizer.from_pretrained('/home/wf/models/chatglm3-6b',trust_remote_code = True)  #TODO:这行代码与下面交换会导致报错，因为torch.load和torch.save得具有相同的脚本结构，torch.save如果使用了trust_remote_code = true可能会导致这可能会改变 Python 环境或路径，从而影响模块的导入顺序,所以这里把tokenizer放到前面执行
     model = torch.load('/home/wf/nx/MI-optimize/examples/chatglm/w4a16rtn.pt')
     exportPath = '/home/wf/nx/MI-optimize/examples/chatglm/chatglm3-6b-int4.flm'
-    model.eval()
+    # model.eval()
     # model.cuda()
+    
+
 
     
     # response, history = model.chat(tokenizer, "你好", history=[])
